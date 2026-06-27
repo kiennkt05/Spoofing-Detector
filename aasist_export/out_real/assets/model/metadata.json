@@ -1,0 +1,20 @@
+{
+  "sample_rate": 16000,
+  "window_seconds": 4.0375,
+  "num_samples": 64600,
+  "input_name": "waveform",
+  "output_name": "probs",
+  "output_layout": [
+    "bonafide_score",
+    "spoof_score"
+  ],
+  "spoof_class_index": 1,
+  "threshold": 0.5,
+  "frontend": {
+    "use_gabor": "True",
+    "use_spcen": "True",
+    "use_sm": false,
+    "first_conv": 128
+  },
+  "parity_check_max_abs_diff": 4.889443516731262e-09
+}

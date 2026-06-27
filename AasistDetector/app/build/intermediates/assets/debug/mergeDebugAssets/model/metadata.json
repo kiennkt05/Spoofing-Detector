@@ -1,0 +1,21 @@
+{
+  "sample_rate": 16000,
+  "window_seconds": 4.0375,
+  "num_samples": 64600,
+  "input_name": "waveform",
+  "output_name": "logits",
+  "output_space": "logits",
+  "output_layout": [
+    "bonafide_logit",
+    "spoof_logit"
+  ],
+  "spoof_class_index": 1,
+  "threshold": -2.1207728385925293,
+  "frontend": {
+    "use_gabor": "True",
+    "use_spcen": "True",
+    "use_sm": false,
+    "first_conv": 128
+  },
+  "parity_check_max_abs_diff": 7.152557373046875e-07
+}
