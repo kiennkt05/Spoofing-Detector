@@ -23,9 +23,11 @@ import java.nio.FloatBuffer
  */
 class AasistOnnxDetector(
     assetManager: AssetManager,
-    modelAssetPath: String = "model/model.onnx",
-    metadataAssetPath: String = "model/metadata.json"
+    modelDir: String = "model"
 ) : AutoCloseable {
+
+    private val modelAssetPath = "$modelDir/model.onnx"
+    private val metadataAssetPath = "$modelDir/metadata.json"
 
     val metadata: DetectorMetadata
 
@@ -69,11 +71,11 @@ class AasistOnnxDetector(
             session.run(mapOf(metadata.inputName to inputTensor)).use { outputs ->
                 @Suppress("UNCHECKED_CAST")
                 val logits = (outputs[0].value as Array<FloatArray>)[0]
-                val bonafide = logits[0]
-                val spoof = logits[metadata.spoofClassIndex]
-                val label = if (spoof >= metadata.threshold) SpoofLabel.LIVE else SpoofLabel.SPOOF
-                Log.d("AasistOnnxDetector", "Inference complete: bonafide=$bonafide, spoof=$spoof, label=$label")
-                return DetectionResult(bonafide, spoof, label)
+                val bonafideLogit = logits[0]
+                val spoofLogit = logits[1]
+                val label = if (bonafideLogit >= metadata.threshold) SpoofLabel.LIVE else SpoofLabel.SPOOF
+                Log.d("AasistOnnxDetector", "Inference complete: bonafide=$bonafideLogit, spoof=$spoofLogit, label=$label")
+                return DetectionResult(bonafideLogit, spoofLogit, label)
             }
         }
     }

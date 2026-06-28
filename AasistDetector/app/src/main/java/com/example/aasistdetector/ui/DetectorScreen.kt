@@ -65,6 +65,7 @@ fun DetectorScreen(
     onToggleDetection: () -> Unit,
     onSwitchMode: (DetectionMode) -> Unit,
     onToggleReplay: () -> Unit,
+    onSwitchModel: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
@@ -136,7 +137,8 @@ fun DetectorScreen(
                     DetectionPanel(
                         uiState = uiState, 
                         onToggleDetection = onToggleDetection,
-                        onToggleReplay = onToggleReplay
+                        onToggleReplay = onToggleReplay,
+                        onSwitchModel = onSwitchModel
                     )
                 }
             }
@@ -153,7 +155,8 @@ fun DetectorScreen(
 private fun DetectionPanel(
     uiState: DetectorUiState,
     onToggleDetection: () -> Unit,
-    onToggleReplay: () -> Unit
+    onToggleReplay: () -> Unit,
+    onSwitchModel: (String) -> Unit
 ) {
     val result = uiState.lastResult
 
@@ -212,19 +215,22 @@ private fun DetectionPanel(
                 .size(160.dp)
                 .clip(RoundedCornerShape(80.dp))
                 .background(
-                    when (result?.label) {
-                        SpoofLabel.LIVE -> MaterialTheme.colorScheme.primaryContainer
-                        SpoofLabel.SPOOF -> MaterialTheme.colorScheme.errorContainer
-                        null -> MaterialTheme.colorScheme.surfaceVariant
+                    when {
+                        uiState.isSilent -> MaterialTheme.colorScheme.surfaceVariant
+                        result?.label == SpoofLabel.LIVE -> MaterialTheme.colorScheme.primaryContainer
+                        result?.label == SpoofLabel.SPOOF -> MaterialTheme.colorScheme.errorContainer
+                        else -> MaterialTheme.colorScheme.surfaceVariant
                     }
                 ),
             contentAlignment = Alignment.Center
         ) {
             Text(
-                text = when (result?.label) {
-                    SpoofLabel.LIVE -> "LIVE"
-                    SpoofLabel.SPOOF -> "SPOOF"
-                    null -> if (uiState.isRecording) "Listening…" else "Idle"
+                text = when {
+                    uiState.isSilent -> "SILENCE"
+                    result?.label == SpoofLabel.LIVE -> "LIVE"
+                    result?.label == SpoofLabel.SPOOF -> "SPOOF"
+                    uiState.isRecording -> "Listening…"
+                    else -> "Idle"
                 },
                 fontSize = 20.sp,
                 fontWeight = FontWeight.Bold
@@ -234,7 +240,7 @@ private fun DetectionPanel(
 
     Spacer(Modifier.height(24.dp))
 
-    if (result != null) {
+    if (result != null && !uiState.isSilent) {
         Row(
             modifier = Modifier
                 .clip(RoundedCornerShape(8.dp))
@@ -258,14 +264,50 @@ private fun DetectionPanel(
         }
         
         Spacer(Modifier.height(24.dp))
+    } else if (uiState.isSilent) {
+        Text(text = "No speech detected", fontSize = 14.sp)
+        Spacer(Modifier.height(24.dp))
     }
 
-    Button(onClick = onToggleDetection, enabled = !uiState.isPlaying) {
-        Text(
-            if (uiState.isRecording) "Stop detection" 
-            else if (uiState.mode == DetectionMode.SINGLE_SHOT) "Record (4s)"
-            else "Start detection"
-        )
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.Center
+    ) {
+        Button(onClick = onToggleDetection, enabled = !uiState.isPlaying) {
+            Text(
+                if (uiState.isRecording) "Stop detection" 
+                else if (uiState.mode == DetectionMode.SINGLE_SHOT) "Record (4s)"
+                else "Start detection"
+            )
+        }
+
+        if (uiState.availableModels.isNotEmpty()) {
+            Spacer(Modifier.width(16.dp))
+            var modelMenuExpanded by remember { mutableStateOf(false) }
+            Box {
+                Button(
+                    onClick = { modelMenuExpanded = true },
+                    enabled = !uiState.isRecording && !uiState.isPlaying
+                ) {
+                    Text(uiState.selectedModel ?: "Select Model")
+                    Icon(Icons.Default.KeyboardArrowDown, contentDescription = null)
+                }
+                DropdownMenu(
+                    expanded = modelMenuExpanded,
+                    onDismissRequest = { modelMenuExpanded = false }
+                ) {
+                    uiState.availableModels.forEach { modelName ->
+                        DropdownMenuItem(
+                            text = { Text(modelName) },
+                            onClick = {
+                                onSwitchModel(modelName)
+                                modelMenuExpanded = false
+                            }
+                        )
+                    }
+                }
+            }
+        }
     }
 
     if (uiState.mode == DetectionMode.SINGLE_SHOT && uiState.recordedAudio != null) {

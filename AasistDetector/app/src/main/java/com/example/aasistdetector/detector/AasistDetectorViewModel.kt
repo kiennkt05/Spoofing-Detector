@@ -9,6 +9,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.map
@@ -19,14 +20,22 @@ import kotlinx.coroutines.launch
 enum class PermissionState { UNKNOWN, GRANTED, DENIED, PERMANENTLY_DENIED }
 enum class DetectionMode { CONTINUOUS, SINGLE_SHOT }
 
+sealed class InferenceOutcome {
+    class Result(val samples: FloatArray, val detection: DetectionResult) : InferenceOutcome()
+    object Silent : InferenceOutcome()
+}
+
 data class DetectorUiState(
     val permissionState: PermissionState = PermissionState.UNKNOWN,
     val mode: DetectionMode = DetectionMode.CONTINUOUS,
     val isRecording: Boolean = false,
+    val isSilent: Boolean = false,
     val lastResult: DetectionResult? = null,
     val recordedAudio: FloatArray? = null,
     val isPlaying: Boolean = false,
-    val errorMessage: String? = null
+    val errorMessage: String? = null,
+    val availableModels: List<String> = emptyList(),
+    val selectedModel: String? = null
 )
 
 /**
@@ -37,12 +46,16 @@ data class DetectorUiState(
  * over a fixed window. Each completed window produces one spoof score and
  * one label -- nothing is appended or refined across windows.
  */
-class AasistDetectorViewModel(assetManager: AssetManager) : ViewModel() {
+class AasistDetectorViewModel(
+    private val assetManager: AssetManager,
+    preferredDefaultModel: String
+) : ViewModel() {
 
-    private val detector = AasistOnnxDetector(assetManager)
-    private val micSource = MicWindowSource(
-        sampleRate = detector.metadata.sampleRate,
-        windowSamples = detector.metadata.numSamples
+    private var detector: AasistOnnxDetector? = null
+    private var micSource: MicWindowSource? = null
+    private val silenceDetector = SilenceDetector(
+        rmsThreshold = 0.03f,
+        holdWindowCount = 1
     )
     private val audioReplayer = AudioReplayer()
 
@@ -50,6 +63,63 @@ class AasistDetectorViewModel(assetManager: AssetManager) : ViewModel() {
     val uiState: StateFlow<DetectorUiState> = _uiState.asStateFlow()
 
     private var recordingJob: Job? = null
+
+    init {
+        val models = discoverModels()
+        _uiState.value = _uiState.value.copy(availableModels = models)
+
+        val defaultModel = if (models.contains(preferredDefaultModel)) {
+            preferredDefaultModel
+        } else {
+            models.firstOrNull()
+        }
+
+        defaultModel?.let { switchModel(it) }
+    }
+
+    private fun discoverModels(): List<String> {
+        val models = mutableListOf<String>()
+        try {
+            val rootItems = assetManager.list("") ?: emptyArray()
+            for (item in rootItems) {
+                // Check if directory has both model.onnx and metadata.json
+                val dirItems = assetManager.list(item) ?: emptyArray()
+                if (dirItems.contains("model.onnx") && dirItems.contains("metadata.json")) {
+                    models.add(item)
+                }
+            }
+        } catch (e: Exception) {
+            // Ignore asset listing errors
+        }
+        return models
+    }
+
+    fun switchModel(modelDir: String) {
+        if (_uiState.value.selectedModel == modelDir) return
+        stopDetection()
+        audioReplayer.stop()
+
+        try {
+            detector?.close()
+            val newDetector = AasistOnnxDetector(assetManager, modelDir)
+            detector = newDetector
+            micSource = MicWindowSource(
+                sampleRate = newDetector.metadata.sampleRate,
+                windowSamples = newDetector.metadata.numSamples
+            )
+            _uiState.value = _uiState.value.copy(
+                selectedModel = modelDir,
+                lastResult = null,
+                recordedAudio = null,
+                isPlaying = false,
+                errorMessage = null
+            )
+        } catch (e: Exception) {
+            _uiState.value = _uiState.value.copy(
+                errorMessage = "Failed to load model: $modelDir\n${e.message}"
+            )
+        }
+    }
 
     fun onPermissionResult(granted: Boolean, canRequestAgain: Boolean) {
         _uiState.value = _uiState.value.copy(
@@ -80,12 +150,13 @@ class AasistDetectorViewModel(assetManager: AssetManager) : ViewModel() {
 
     fun toggleReplay() {
         val audio = _uiState.value.recordedAudio ?: return
+        val currentDetector = detector ?: return
         if (_uiState.value.isPlaying) {
             audioReplayer.stop()
             _uiState.value = _uiState.value.copy(isPlaying = false)
         } else {
             _uiState.value = _uiState.value.copy(isPlaying = true)
-            audioReplayer.play(audio, detector.metadata.sampleRate) {
+            audioReplayer.play(audio, currentDetector.metadata.sampleRate) {
                 _uiState.value = _uiState.value.copy(isPlaying = false)
             }
         }
@@ -95,25 +166,53 @@ class AasistDetectorViewModel(assetManager: AssetManager) : ViewModel() {
         if (_uiState.value.permissionState != PermissionState.GRANTED) return
         if (recordingJob?.isActive == true) return
 
-        _uiState.value = _uiState.value.copy(isRecording = true, errorMessage = null, isPlaying = false)
+        _uiState.value = _uiState.value.copy(
+            isRecording = true, 
+            isSilent = false, 
+            errorMessage = null, 
+            isPlaying = false
+        )
         audioReplayer.stop()
 
-        val isSingleShot = _uiState.value.mode == DetectionMode.SINGLE_SHOT
-        var flow = micSource.windows()
-        if (isSingleShot) {
-            flow = flow.take(1)
+        val currentDetector = detector
+        val currentMicSource = micSource
+        if (currentDetector == null || currentMicSource == null) {
+            _uiState.value = _uiState.value.copy(errorMessage = "No model selected")
+            return
         }
 
-        recordingJob = flow
-            .map { window ->
-                val result = detector.runInference(window)
-                Pair(window, result)
+        val isSingleShot = _uiState.value.mode == DetectionMode.SINGLE_SHOT
+        var windowedFlow = silenceDetector.filter(currentMicSource.windows())
+        if (isSingleShot) {
+            windowedFlow = windowedFlow.filterIsInstance<WindowedAudio.Speech>().take(1)
+        }
+
+        recordingJob = windowedFlow
+            .map { windowed ->
+                when (windowed) {
+                    is WindowedAudio.Speech -> {
+                        val result = currentDetector.runInference(windowed.samples)
+                        InferenceOutcome.Result(windowed.samples, result)
+                    }
+                    is WindowedAudio.Silence -> InferenceOutcome.Silent
+                }
             }
             .flowOn(Dispatchers.IO)
-            .onEach { (window, result) ->
-                _uiState.value = _uiState.value.copy(lastResult = result, recordedAudio = window)
-                if (isSingleShot) {
-                    _uiState.value = _uiState.value.copy(isRecording = false)
+            .onEach { outcome ->
+                when (outcome) {
+                    is InferenceOutcome.Silent -> {
+                        _uiState.value = _uiState.value.copy(isSilent = true)
+                    }
+                    is InferenceOutcome.Result -> {
+                        _uiState.value = _uiState.value.copy(
+                            isSilent = false,
+                            lastResult = outcome.detection,
+                            recordedAudio = outcome.samples
+                        )
+                        if (isSingleShot) {
+                            _uiState.value = _uiState.value.copy(isRecording = false)
+                        }
+                    }
                 }
             }
             .catch { e ->
@@ -134,7 +233,7 @@ class AasistDetectorViewModel(assetManager: AssetManager) : ViewModel() {
     override fun onCleared() {
         stopDetection()
         audioReplayer.stop()
-        detector.close()
+        detector?.close()
         super.onCleared()
     }
 }

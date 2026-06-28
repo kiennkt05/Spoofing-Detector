@@ -29,6 +29,7 @@ data class DetectorMetadata(
                 inputName = obj.getString("input_name"),
                 outputName = obj.getString("output_name"),
                 outputSpace = obj.getString("output_space"),
+                // Note: The python export script uses "spoof_class_index" to refer to the index of the *bonafide* logit (index 1).
                 spoofClassIndex = obj.getInt("spoof_class_index"),
                 threshold = obj.getDouble("threshold").toFloat()
             )

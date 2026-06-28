@@ -20,12 +20,10 @@ import com.example.aasistdetector.ui.DetectorScreen
 
 class MainActivity : ComponentActivity() {
 
-    // Created eagerly via the activity-scoped `by viewModels` delegate so it
-    // exists before onCreate's permission check runs -- assigning it lazily
-    // inside the setContent {} composable lambda would race with
-    // checkOrRequestPermission() being called right after setContent.
+    private val PREFERRED_DEFAULT_MODEL = "model"
+
     private val viewModel: AasistDetectorViewModel by viewModels {
-        AasistDetectorViewModelFactory(assets)
+        AasistDetectorViewModelFactory(assets, PREFERRED_DEFAULT_MODEL)
     }
 
     private val requestPermissionLauncher = registerForActivityResult(
@@ -50,7 +48,8 @@ class MainActivity : ComponentActivity() {
                         onRequestPermission = { checkOrRequestPermission() },
                         onToggleDetection = { viewModel.toggleDetection() },
                         onSwitchMode = { viewModel.switchMode(it) },
-                        onToggleReplay = { viewModel.toggleReplay() }
+                        onToggleReplay = { viewModel.toggleReplay() },
+                        onSwitchModel = { viewModel.switchModel(it) }
                     )
                 }
             }
@@ -58,14 +57,6 @@ class MainActivity : ComponentActivity() {
 
         checkOrRequestPermission()
     }
-
-    // NOTE: AasistDetectorViewModel's constructor eagerly loads model.onnx +
-    // metadata.json from assets via AasistOnnxDetector's init block. If those
-    // files are missing (see assets/model/README.txt), the `by viewModels`
-    // delegate above will throw when first accessed and the activity will
-    // crash on launch with a clear stack trace pointing at the missing
-    // asset path -- this is intentional fail-fast behavior for a build-time
-    // packaging contract, not something to silently recover from at runtime.
 
     private fun checkOrRequestPermission() {
         val granted = ContextCompat.checkSelfPermission(
