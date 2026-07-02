@@ -1,6 +1,8 @@
 package com.example.aasistdetector
 
 import android.Manifest
+import android.content.Context
+import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -22,8 +24,12 @@ class MainActivity : ComponentActivity() {
 
     private val PREFERRED_DEFAULT_MODEL = "model"
 
+    private val sharedPreferences: SharedPreferences by lazy {
+        getSharedPreferences("detector_settings", Context.MODE_PRIVATE)
+    }
+
     private val viewModel: AasistDetectorViewModel by viewModels {
-        AasistDetectorViewModelFactory(assets, PREFERRED_DEFAULT_MODEL)
+        AasistDetectorViewModelFactory(assets, PREFERRED_DEFAULT_MODEL, sharedPreferences)
     }
 
     private val requestPermissionLauncher = registerForActivityResult(
@@ -49,7 +55,9 @@ class MainActivity : ComponentActivity() {
                         onToggleDetection = { viewModel.toggleDetection() },
                         onSwitchMode = { viewModel.switchMode(it) },
                         onToggleReplay = { viewModel.toggleReplay() },
-                        onSwitchModel = { viewModel.switchModel(it) }
+                        onSwitchModel = { viewModel.switchModel(it) },
+                        onSetDecisionThreshold = { viewModel.setDecisionThreshold(it) },
+                        onSetRmsThreshold = { viewModel.setRmsThreshold(it) }
                     )
                 }
             }

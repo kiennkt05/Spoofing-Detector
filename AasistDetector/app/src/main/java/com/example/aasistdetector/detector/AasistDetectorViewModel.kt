@@ -1,5 +1,6 @@
 package com.example.aasistdetector.detector
 
+import android.content.SharedPreferences
 import android.content.res.AssetManager
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -29,7 +30,9 @@ data class DetectorUiState(
     val errorMessage: String? = null,
     val availableModels: List<String> = emptyList(),
     val selectedModel: String? = null,
-    val rmsLevel: Float = 0f
+    val rmsLevel: Float = 0f,
+    val threshold: Float = 0f,
+    val rmsThreshold: Float = 0.01f
 )
 
 /**
@@ -42,7 +45,8 @@ data class DetectorUiState(
  */
 class AasistDetectorViewModel(
     private val assetManager: AssetManager,
-    preferredDefaultModel: String
+    preferredDefaultModel: String,
+    private val sharedPreferences: SharedPreferences
 ) : ViewModel() {
 
     private var detector: AasistOnnxDetector? = null
@@ -60,15 +64,17 @@ class AasistDetectorViewModel(
 
     init {
         val models = discoverModels()
-        _uiState.value = _uiState.value.copy(availableModels = models)
+        
+        val savedModel = sharedPreferences.getString("selected_model", null)
+        val initialModel = savedModel.takeIf { it != null && models.contains(it) }
+            ?: if (models.contains(preferredDefaultModel)) preferredDefaultModel else models.firstOrNull()
 
-        val defaultModel = if (models.contains(preferredDefaultModel)) {
-            preferredDefaultModel
-        } else {
-            models.firstOrNull()
-        }
+        val savedRms = sharedPreferences.getFloat("rms_threshold", 0.01f)
+        silenceDetector.rmsThreshold = savedRms
+        
+        _uiState.value = _uiState.value.copy(availableModels = models, rmsThreshold = savedRms)
 
-        defaultModel?.let { switchModel(it) }
+        initialModel?.let { switchModel(it) }
     }
 
     private fun discoverModels(): List<String> {
@@ -101,18 +107,38 @@ class AasistDetectorViewModel(
                 sampleRate = newDetector.metadata.sampleRate,
                 windowSamples = newDetector.metadata.numSamples
             )
+            
+            val threshold = if (sharedPreferences.contains("decision_threshold")) {
+                sharedPreferences.getFloat("decision_threshold", newDetector.metadata.threshold)
+            } else {
+                newDetector.metadata.threshold
+            }
+            
             _uiState.value = _uiState.value.copy(
                 selectedModel = modelDir,
                 lastResult = null,
                 recordedAudio = null,
                 isPlaying = false,
-                errorMessage = null
+                errorMessage = null,
+                threshold = threshold
             )
+            sharedPreferences.edit().putString("selected_model", modelDir).apply()
         } catch (e: Exception) {
             _uiState.value = _uiState.value.copy(
                 errorMessage = "Failed to load model: $modelDir\n${e.message}"
             )
         }
+    }
+
+    fun setDecisionThreshold(value: Float) {
+        sharedPreferences.edit().putFloat("decision_threshold", value).apply()
+        _uiState.value = _uiState.value.copy(threshold = value)
+    }
+
+    fun setRmsThreshold(value: Float) {
+        sharedPreferences.edit().putFloat("rms_threshold", value).apply()
+        silenceDetector.rmsThreshold = value
+        _uiState.value = _uiState.value.copy(rmsThreshold = value)
     }
 
     fun onPermissionResult(granted: Boolean, canRequestAgain: Boolean) {
@@ -192,7 +218,7 @@ class AasistDetectorViewModel(
                                     if (speechCount > 0) {
                                         val avgBonafide = accumulatedBonafide / speechCount
                                         val avgSpoof = accumulatedSpoof / speechCount
-                                        val finalLabel = if (avgBonafide >= currentDetector.metadata.threshold) SpoofLabel.LIVE else SpoofLabel.SPOOF
+                                        val finalLabel = if (avgBonafide >= _uiState.value.threshold) SpoofLabel.LIVE else SpoofLabel.SPOOF
                                         val finalResult = DetectionResult(avgBonafide, avgSpoof, finalLabel)
                                         
                                         val combinedSamples = FloatArray(allSamples.sumOf { it.size })

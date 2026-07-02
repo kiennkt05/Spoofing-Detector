@@ -40,7 +40,7 @@ import kotlin.math.sqrt
  *                         unwanted inference triggers.
  */
 class SilenceDetector(
-    val rmsThreshold: Float = 0.01f,
+    var rmsThreshold: Float = 0.01f,
     val holdWindowCount: Int = 1
 ) {
 

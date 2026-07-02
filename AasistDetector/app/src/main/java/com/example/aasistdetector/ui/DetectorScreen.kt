@@ -43,6 +43,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
@@ -66,6 +67,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.isActive
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -86,8 +88,11 @@ fun DetectorScreen(
     onSwitchMode: (DetectionMode) -> Unit,
     onToggleReplay: () -> Unit,
     onSwitchModel: (String) -> Unit,
+    onSetDecisionThreshold: (Float) -> Unit,
+    onSetRmsThreshold: (Float) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    var showSettings by remember { mutableStateOf(false) }
     val pagerState = androidx.compose.foundation.pager.rememberPagerState(
         initialPage = if (uiState.mode == DetectionMode.CONTINUOUS_REALTIME) 1 else 0,
         pageCount = { 2 }
@@ -111,7 +116,7 @@ fun DetectorScreen(
             TopAppBar(
                 title = { Text("Spoof detector", fontSize = 16.sp, fontWeight = FontWeight.Medium) },
                 actions = {
-                    IconButton(onClick = {}) {
+                    IconButton(onClick = { showSettings = true }) {
                         Icon(Icons.Default.Settings, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
@@ -185,6 +190,75 @@ fun DetectorScreen(
                 Text(text = message, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(horizontal = 24.dp))
             }
         }
+
+        if (showSettings) {
+            androidx.compose.material3.ModalBottomSheet(
+                onDismissRequest = { showSettings = false }
+            ) {
+                SettingsSheetContent(
+                    uiState = uiState,
+                    onSetDecisionThreshold = onSetDecisionThreshold,
+                    onSetRmsThreshold = onSetRmsThreshold,
+                    onSwitchModel = onSwitchModel
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SettingsSheetContent(
+    uiState: DetectorUiState,
+    onSetDecisionThreshold: (Float) -> Unit,
+    onSetRmsThreshold: (Float) -> Unit,
+    onSwitchModel: (String) -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 24.dp)
+            .padding(bottom = 48.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        Text("Settings", fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
+
+        Text("Model Selection", fontWeight = FontWeight.Medium)
+        if (uiState.availableModels.isNotEmpty()) {
+            var expanded by remember { mutableStateOf(false) }
+            Box {
+                FilterChip(
+                    selected = false,
+                    onClick = { expanded = true },
+                    label = { Text(uiState.selectedModel ?: "Select Model") },
+                    trailingIcon = { Icon(Icons.Default.KeyboardArrowDown, contentDescription = null) }
+                )
+                DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                    uiState.availableModels.forEach { modelName ->
+                        DropdownMenuItem(
+                            text = { Text(modelName) },
+                            onClick = {
+                                onSwitchModel(modelName)
+                                expanded = false
+                            }
+                        )
+                    }
+                }
+            }
+        }
+
+        Text("Decision Threshold: ${String.format("%.2f", uiState.threshold)}", fontWeight = FontWeight.Medium)
+        androidx.compose.material3.Slider(
+            value = uiState.threshold,
+            onValueChange = { onSetDecisionThreshold(it) },
+            valueRange = -10f..10f
+        )
+
+        Text("RMS Threshold: ${String.format("%.3f", uiState.rmsThreshold)}", fontWeight = FontWeight.Medium)
+        androidx.compose.material3.Slider(
+            value = uiState.rmsThreshold,
+            onValueChange = { onSetRmsThreshold(it) },
+            valueRange = 0.001f..0.2f
+        )
     }
 }
 
@@ -245,34 +319,6 @@ private fun DetectionPanel(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Top
     ) {
-        // Model selection chip
-        if (uiState.availableModels.isNotEmpty()) {
-            var modelMenuExpanded by remember { mutableStateOf(false) }
-            Box {
-                FilterChip(
-                    selected = false,
-                    onClick = { modelMenuExpanded = true },
-                    label = { Text(uiState.selectedModel ?: "Select Model") },
-                    trailingIcon = { Icon(Icons.Default.KeyboardArrowDown, contentDescription = null) },
-                    enabled = !uiState.isRecording && !uiState.isPlaying
-                )
-                DropdownMenu(
-                    expanded = modelMenuExpanded,
-                    onDismissRequest = { modelMenuExpanded = false }
-                ) {
-                    uiState.availableModels.forEach { modelName ->
-                        DropdownMenuItem(
-                            text = { Text(modelName) },
-                            onClick = {
-                                onSwitchModel(modelName)
-                                modelMenuExpanded = false
-                            }
-                        )
-                    }
-                }
-            }
-        }
-
         Spacer(Modifier.height(32.dp))
 
         // Status indicator
@@ -371,7 +417,8 @@ private fun DetectionPanel(
                 modifier = Modifier
                     .fillMaxWidth(0.8f)
                     .clickable { showScores = !showScores },
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurfaceVariant),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Row(
@@ -387,8 +434,9 @@ private fun DetectionPanel(
                     }
                     AnimatedVisibility(visible = showScores) {
                         Column(modifier = Modifier.padding(top = 16.dp)) {
-                            Text(text = "Bonafide logit: ${String.format("%.3f", result.bonafideLogit)}", fontSize = 12.sp, fontWeight = FontWeight.Light)
-                            Text(text = "Spoof logit: ${String.format("%.3f", result.spoofLogit)}", fontSize = 12.sp, fontWeight = FontWeight.Light)
+                            Text(text = "Bonafide logit: ${String.format("%.3f", result.bonafideLogit)}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(text = "Spoof logit: ${String.format("%.3f", result.spoofLogit)}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(text = "Threshold: ${String.format("%.3f", uiState.threshold)}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
                 }
@@ -411,7 +459,9 @@ fun DetectorScreenIdlePreview() {
             onToggleDetection = {},
             onSwitchMode = {},
             onToggleReplay = {},
-            onSwitchModel = {}
+            onSwitchModel = {},
+            onSetDecisionThreshold = {},
+            onSetRmsThreshold = {}
         )
     }
 }
@@ -431,7 +481,9 @@ fun DetectorScreenLivePreview() {
             onToggleDetection = {},
             onSwitchMode = {},
             onToggleReplay = {},
-            onSwitchModel = {}
+            onSwitchModel = {},
+            onSetDecisionThreshold = {},
+            onSetRmsThreshold = {}
         )
     }
 }
@@ -451,7 +503,32 @@ fun DetectorScreenSpoofPreview() {
             onToggleDetection = {},
             onSwitchMode = {},
             onToggleReplay = {},
-            onSwitchModel = {}
+            onSwitchModel = {},
+            onSetDecisionThreshold = {},
+            onSetRmsThreshold = {}
+        )
+    }
+}
+
+@Preview(showBackground = true, name = "Detection Finished")
+@Composable
+fun DetectorScreenFinishedPreview() {
+    MaterialTheme {
+        DetectorScreen(
+            uiState = DetectorUiState(
+                permissionState = PermissionState.GRANTED,
+                isRecording = false,
+                lastResult = DetectionResult(bonafideLogit = 1.5f, spoofLogit = -3.2f, label = SpoofLabel.LIVE),
+                availableModels = listOf("tt16_100eps"),
+                selectedModel = "tt16_100eps"
+            ),
+            onRequestPermission = {},
+            onToggleDetection = {},
+            onSwitchMode = {},
+            onToggleReplay = {},
+            onSwitchModel = {},
+            onSetDecisionThreshold = {},
+            onSetRmsThreshold = {}
         )
     }
 }
@@ -471,7 +548,28 @@ fun DetectorScreenRealtimePreview() {
             onToggleDetection = {},
             onSwitchMode = {},
             onToggleReplay = {},
-            onSwitchModel = {}
+            onSwitchModel = {},
+            onSetDecisionThreshold = {},
+            onSetRmsThreshold = {}
         )
+    }
+}
+
+@Preview(showBackground = true, name = "Settings Sheet Content")
+@Composable
+fun SettingsSheetContentPreview() {
+    MaterialTheme {
+        Surface {
+            SettingsSheetContent(
+                uiState = DetectorUiState(
+                    availableModels = listOf("tt16_100eps", "model_v2"),
+                    selectedModel = "tt16_100eps",
+                    threshold = 1.5f
+                ),
+                onSetDecisionThreshold = {},
+                onSetRmsThreshold = {},
+                onSwitchModel = {}
+            )
+        }
     }
 }
