@@ -57,7 +57,7 @@ import com.example.aasistdetector.detector.SpoofLabel
  * evaluation pipeline (main.py) reads class index 1 as "the score", and
  * that's what's surfaced to the user, not text.
  */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun DetectorScreen(
     uiState: DetectorUiState,
@@ -68,36 +68,25 @@ fun DetectorScreen(
     onSwitchModel: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val pagerState = androidx.compose.foundation.pager.rememberPagerState(pageCount = { 2 })
+
+    LaunchedEffect(pagerState.currentPage) {
+        val newMode = if (pagerState.currentPage == 0) DetectionMode.CONTINUOUS_AVERAGING else DetectionMode.CONTINUOUS_REALTIME
+        onSwitchMode(newMode)
+    }
+
+    LaunchedEffect(uiState.mode) {
+        val targetPage = if (uiState.mode == DetectionMode.CONTINUOUS_AVERAGING) 0 else 1
+        if (pagerState.currentPage != targetPage) {
+            pagerState.animateScrollToPage(targetPage)
+        }
+    }
     var menuExpanded by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Spoof Detector") },
-                navigationIcon = {
-                    IconButton(onClick = { menuExpanded = true }) {
-                        Icon(Icons.Default.Menu, contentDescription = "Menu")
-                    }
-                    DropdownMenu(
-                        expanded = menuExpanded,
-                        onDismissRequest = { menuExpanded = false }
-                    ) {
-                        DropdownMenuItem(
-                            text = { Text("Continuous Detection") },
-                            onClick = {
-                                onSwitchMode(DetectionMode.CONTINUOUS)
-                                menuExpanded = false
-                            }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("Single-Shot Detection") },
-                            onClick = {
-                                onSwitchMode(DetectionMode.SINGLE_SHOT)
-                                menuExpanded = false
-                            }
-                        )
-                    }
-                }
+                title = { Text("Spoof Detector") }
             )
         }
     ) { paddingValues ->
@@ -134,12 +123,30 @@ fun DetectorScreen(
                 }
 
                 PermissionState.GRANTED -> {
-                    DetectionPanel(
-                        uiState = uiState, 
-                        onToggleDetection = onToggleDetection,
-                        onToggleReplay = onToggleReplay,
-                        onSwitchModel = onSwitchModel
+                    Text(
+                        text = "Swipe left/right to switch modes",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                    Spacer(Modifier.height(16.dp))
+                    androidx.compose.foundation.pager.HorizontalPager(
+                        state = pagerState,
+                        modifier = Modifier.fillMaxSize()
+                    ) { page ->
+                        Column(
+                            modifier = Modifier.fillMaxSize(),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center
+                        ) {
+                            DetectionPanel(
+                                uiState = uiState, 
+                                pageMode = if (page == 0) DetectionMode.CONTINUOUS_AVERAGING else DetectionMode.CONTINUOUS_REALTIME,
+                                onToggleDetection = onToggleDetection,
+                                onToggleReplay = onToggleReplay,
+                                onSwitchModel = onSwitchModel
+                            )
+                        }
+                    }
                 }
             }
 
@@ -154,6 +161,7 @@ fun DetectorScreen(
 @Composable
 private fun DetectionPanel(
     uiState: DetectorUiState,
+    pageMode: DetectionMode,
     onToggleDetection: () -> Unit,
     onToggleReplay: () -> Unit,
     onSwitchModel: (String) -> Unit
@@ -165,18 +173,7 @@ private fun DetectionPanel(
 
     LaunchedEffect(uiState.isRecording) {
         if (uiState.isRecording) {
-            if (uiState.mode == DetectionMode.CONTINUOUS) {
-                while (isActive) {
-                    progress = 0f
-                    animate(
-                        initialValue = 0f,
-                        targetValue = 1f,
-                        animationSpec = tween(durationMillis = 4000, easing = LinearEasing)
-                    ) { value, _ ->
-                        progress = value
-                    }
-                }
-            } else {
+            while (isActive) {
                 progress = 0f
                 animate(
                     initialValue = 0f,
@@ -192,7 +189,7 @@ private fun DetectionPanel(
     }
 
     Text(
-        text = if (uiState.mode == DetectionMode.CONTINUOUS) "Continuous Mode" else "Single-Shot Mode",
+        text = if (pageMode == DetectionMode.CONTINUOUS_AVERAGING) "Continuous (Averaging)" else "Continuous (Realtime)",
         style = MaterialTheme.typography.titleMedium
     )
     Spacer(Modifier.height(24.dp))
@@ -276,7 +273,6 @@ private fun DetectionPanel(
         Button(onClick = onToggleDetection, enabled = !uiState.isPlaying) {
             Text(
                 if (uiState.isRecording) "Stop detection" 
-                else if (uiState.mode == DetectionMode.SINGLE_SHOT) "Record (4s)"
                 else "Start detection"
             )
         }
@@ -310,7 +306,7 @@ private fun DetectionPanel(
         }
     }
 
-    if (uiState.mode == DetectionMode.SINGLE_SHOT && uiState.recordedAudio != null) {
+    if (uiState.recordedAudio != null) {
         Spacer(Modifier.height(16.dp))
         Button(onClick = onToggleReplay, enabled = !uiState.isRecording) {
             Text(if (uiState.isPlaying) "Stop Replay" else "Replay Recording")

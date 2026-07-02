@@ -8,17 +8,10 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.catch
-import kotlinx.coroutines.flow.filterIsInstance
-import kotlinx.coroutines.flow.flowOn
-import kotlinx.coroutines.flow.launchIn
-import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.flow.onEach
-import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.launch
 
 enum class PermissionState { UNKNOWN, GRANTED, DENIED, PERMANENTLY_DENIED }
-enum class DetectionMode { CONTINUOUS, SINGLE_SHOT }
+enum class DetectionMode { CONTINUOUS_REALTIME, CONTINUOUS_AVERAGING }
 
 sealed class InferenceOutcome {
     class Result(val samples: FloatArray, val detection: DetectionResult) : InferenceOutcome()
@@ -27,7 +20,7 @@ sealed class InferenceOutcome {
 
 data class DetectorUiState(
     val permissionState: PermissionState = PermissionState.UNKNOWN,
-    val mode: DetectionMode = DetectionMode.CONTINUOUS,
+    val mode: DetectionMode = DetectionMode.CONTINUOUS_AVERAGING,
     val isRecording: Boolean = false,
     val isSilent: Boolean = false,
     val lastResult: DetectionResult? = null,
@@ -181,47 +174,83 @@ class AasistDetectorViewModel(
             return
         }
 
-        val isSingleShot = _uiState.value.mode == DetectionMode.SINGLE_SHOT
-        var windowedFlow = silenceDetector.filter(currentMicSource.windows())
-        if (isSingleShot) {
-            windowedFlow = windowedFlow.filterIsInstance<WindowedAudio.Speech>().take(1)
-        }
-
-        recordingJob = windowedFlow
-            .map { windowed ->
-                when (windowed) {
-                    is WindowedAudio.Speech -> {
-                        val result = currentDetector.runInference(windowed.samples)
-                        InferenceOutcome.Result(windowed.samples, result)
-                    }
-                    is WindowedAudio.Silence -> InferenceOutcome.Silent
-                }
-            }
-            .flowOn(Dispatchers.IO)
-            .onEach { outcome ->
-                when (outcome) {
-                    is InferenceOutcome.Silent -> {
-                        _uiState.value = _uiState.value.copy(isSilent = true)
-                    }
-                    is InferenceOutcome.Result -> {
-                        _uiState.value = _uiState.value.copy(
-                            isSilent = false,
-                            lastResult = outcome.detection,
-                            recordedAudio = outcome.samples
-                        )
-                        if (isSingleShot) {
-                            _uiState.value = _uiState.value.copy(isRecording = false)
+        recordingJob = viewModelScope.launch(Dispatchers.IO) {
+            try {
+                var isSpeechStarted = false
+                var accumulatedBonafide = 0f
+                var accumulatedSpoof = 0f
+                var speechCount = 0
+                val allSamples = mutableListOf<FloatArray>()
+                
+                silenceDetector.filter(currentMicSource.windows()).collect { windowed ->
+                    when (windowed) {
+                        is WindowedAudio.Silence -> {
+                            _uiState.value = _uiState.value.copy(isSilent = true)
+                            if (_uiState.value.mode == DetectionMode.CONTINUOUS_AVERAGING) {
+                                if (isSpeechStarted) {
+                                    if (speechCount > 0) {
+                                        val avgBonafide = accumulatedBonafide / speechCount
+                                        val avgSpoof = accumulatedSpoof / speechCount
+                                        val finalLabel = if (avgBonafide >= currentDetector.metadata.threshold) SpoofLabel.LIVE else SpoofLabel.SPOOF
+                                        val finalResult = DetectionResult(avgBonafide, avgSpoof, finalLabel)
+                                        
+                                        val combinedSamples = FloatArray(allSamples.sumOf { it.size })
+                                        var offset = 0
+                                        for (s in allSamples) {
+                                            System.arraycopy(s, 0, combinedSamples, offset, s.size)
+                                            offset += s.size
+                                        }
+                                        
+                                        _uiState.value = _uiState.value.copy(
+                                            isSilent = false,
+                                            lastResult = finalResult,
+                                            recordedAudio = combinedSamples,
+                                            isRecording = false
+                                        )
+                                    } else {
+                                        _uiState.value = _uiState.value.copy(isRecording = false)
+                                    }
+                                    throw kotlinx.coroutines.CancellationException("Stopped by silence")
+                                }
+                            }
+                        }
+                        is WindowedAudio.Speech -> {
+                            isSpeechStarted = true
+                            _uiState.value = _uiState.value.copy(isSilent = false)
+                            
+                            val result = currentDetector.runInference(windowed.samples)
+                            
+                            if (_uiState.value.mode == DetectionMode.CONTINUOUS_AVERAGING) {
+                                accumulatedBonafide += result.bonafideLogit
+                                accumulatedSpoof += result.spoofLogit
+                                speechCount++
+                                allSamples.add(windowed.samples)
+                            } else {
+                                // CONTINUOUS_REALTIME
+                                allSamples.add(windowed.samples)
+                                val combinedSamples = FloatArray(allSamples.sumOf { it.size })
+                                var offset = 0
+                                for (s in allSamples) {
+                                    System.arraycopy(s, 0, combinedSamples, offset, s.size)
+                                    offset += s.size
+                                }
+                                _uiState.value = _uiState.value.copy(
+                                    lastResult = result,
+                                    recordedAudio = combinedSamples
+                                )
+                            }
                         }
                     }
                 }
-            }
-            .catch { e ->
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                // Expected when stopping manually or by silence
+            } catch (e: Exception) {
                 _uiState.value = _uiState.value.copy(
                     isRecording = false,
                     errorMessage = e.message ?: "Microphone or inference error"
                 )
             }
-            .launchIn(viewModelScope)
+        }
     }
 
     private fun stopDetection() {
