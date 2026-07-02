@@ -53,14 +53,13 @@ class SilenceDetector(
      * squared values in Float loses mantissa bits -- Double is safer
      * and the cast to Float only happens on the final result.)
      */
-    fun isSilent(window: FloatArray): Boolean {
+    fun calculateRmsAndIsSilent(window: FloatArray): Pair<Float, Boolean> {
         var sumSq = 0.0
         for (sample in window) {
             sumSq += sample * sample
         }
         val rms = sqrt(sumSq / window.size).toFloat()
-        android.util.Log.d("SilenceDetector", "RMS = $rms")
-        return rms < rmsThreshold
+        return Pair(rms, rms < rmsThreshold)
     }
 
     /**
@@ -87,18 +86,19 @@ class SilenceDetector(
     fun filter(upstream: Flow<FloatArray>): Flow<WindowedAudio> {
         var consecutiveSpeech = 0
         return upstream.map { window ->
-            if (isSilent(window)) {
+            val (rms, isSilent) = calculateRmsAndIsSilent(window)
+            if (isSilent) {
                 consecutiveSpeech = 0
-                WindowedAudio.Silence
+                WindowedAudio.Silence(rms)
             } else {
                 consecutiveSpeech++
                 if (consecutiveSpeech >= holdWindowCount) {
-                    WindowedAudio.Speech(window)
+                    WindowedAudio.Speech(window, rms)
                 } else {
                     // Still in the warm-up period after a silence gap.
                     // Emit Silence so the UI stays in the "no speech" state
                     // rather than flashing a result from a partial window.
-                    WindowedAudio.Silence
+                    WindowedAudio.Silence(rms)
                 }
             }
         }

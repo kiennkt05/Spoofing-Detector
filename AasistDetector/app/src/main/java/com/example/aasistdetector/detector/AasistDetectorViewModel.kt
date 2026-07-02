@@ -28,7 +28,8 @@ data class DetectorUiState(
     val isPlaying: Boolean = false,
     val errorMessage: String? = null,
     val availableModels: List<String> = emptyList(),
-    val selectedModel: String? = null
+    val selectedModel: String? = null,
+    val rmsLevel: Float = 0f
 )
 
 /**
@@ -205,18 +206,21 @@ class AasistDetectorViewModel(
                                             isSilent = false,
                                             lastResult = finalResult,
                                             recordedAudio = combinedSamples,
-                                            isRecording = false
+                                            isRecording = false,
+                                            rmsLevel = windowed.rms
                                         )
                                     } else {
-                                        _uiState.value = _uiState.value.copy(isRecording = false)
+                                        _uiState.value = _uiState.value.copy(isRecording = false, rmsLevel = windowed.rms)
                                     }
                                     throw kotlinx.coroutines.CancellationException("Stopped by silence")
                                 }
                             }
+                            // Also update UI when silent if not averaging and waiting
+                            _uiState.value = _uiState.value.copy(rmsLevel = windowed.rms)
                         }
                         is WindowedAudio.Speech -> {
                             isSpeechStarted = true
-                            _uiState.value = _uiState.value.copy(isSilent = false)
+                            _uiState.value = _uiState.value.copy(isSilent = false, rmsLevel = windowed.rms)
                             
                             val result = currentDetector.runInference(windowed.samples)
                             
@@ -236,7 +240,8 @@ class AasistDetectorViewModel(
                                 }
                                 _uiState.value = _uiState.value.copy(
                                     lastResult = result,
-                                    recordedAudio = combinedSamples
+                                    recordedAudio = combinedSamples,
+                                    rmsLevel = windowed.rms
                                 )
                             }
                         }

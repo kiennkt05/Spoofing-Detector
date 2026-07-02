@@ -1,62 +1,82 @@
 package com.example.aasistdetector.ui
 
+import android.view.HapticFeedbackConstants
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.animate
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.clickable
-import androidx.compose.material3.Button
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.animate
-import androidx.compose.animation.core.tween
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
-import androidx.compose.material.icons.filled.Menu
-import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
+import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.isActive
+import androidx.compose.foundation.Canvas
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.tooling.preview.Preview
 import com.example.aasistdetector.detector.DetectionMode
+import com.example.aasistdetector.detector.DetectionResult
 import com.example.aasistdetector.detector.DetectorUiState
 import com.example.aasistdetector.detector.PermissionState
 import com.example.aasistdetector.detector.SpoofLabel
+import kotlinx.coroutines.launch
 
-/**
- * Detector screen: mic permission state -> recording state -> spoof score ->
- * live/spoof decision. There is no transcript view anywhere here, because
- * the model is a 2-class spoof classifier, not an ASR model -- the
- * evaluation pipeline (main.py) reads class index 1 as "the score", and
- * that's what's surfaced to the user, not text.
- */
 @OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun DetectorScreen(
@@ -68,7 +88,11 @@ fun DetectorScreen(
     onSwitchModel: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val pagerState = androidx.compose.foundation.pager.rememberPagerState(pageCount = { 2 })
+    val pagerState = androidx.compose.foundation.pager.rememberPagerState(
+        initialPage = if (uiState.mode == DetectionMode.CONTINUOUS_REALTIME) 1 else 0,
+        pageCount = { 2 }
+    )
+    val coroutineScope = rememberCoroutineScope()
 
     LaunchedEffect(pagerState.currentPage) {
         val newMode = if (pagerState.currentPage == 0) DetectionMode.CONTINUOUS_AVERAGING else DetectionMode.CONTINUOUS_REALTIME
@@ -81,12 +105,16 @@ fun DetectorScreen(
             pagerState.animateScrollToPage(targetPage)
         }
     }
-    var menuExpanded by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Spoof Detector") }
+                title = { Text("Spoof detector", fontSize = 16.sp, fontWeight = FontWeight.Medium) },
+                actions = {
+                    IconButton(onClick = {}) {
+                        Icon(Icons.Default.Settings, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
             )
         }
     ) { paddingValues ->
@@ -94,85 +122,101 @@ fun DetectorScreen(
             modifier = modifier
                 .fillMaxSize()
                 .padding(paddingValues)
-                .padding(24.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
+                .verticalScroll(rememberScrollState())
+                .padding(bottom = 24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
             when (uiState.permissionState) {
                 PermissionState.UNKNOWN -> {
-                    Text("Microphone access is needed to run detection.")
+                    Spacer(Modifier.height(48.dp))
+                    Text("Microphone access is needed to run detection.", modifier = Modifier.padding(horizontal = 24.dp))
                     Spacer(Modifier.height(12.dp))
                     Button(onClick = onRequestPermission) {
                         Text("Grant microphone permission")
                     }
                 }
-
                 PermissionState.DENIED -> {
-                    Text("Microphone permission was denied.")
+                    Spacer(Modifier.height(48.dp))
+                    Text("Microphone permission was denied.", modifier = Modifier.padding(horizontal = 24.dp))
                     Spacer(Modifier.height(12.dp))
                     Button(onClick = onRequestPermission) {
                         Text("Try again")
                     }
                 }
-
                 PermissionState.PERMANENTLY_DENIED -> {
+                    Spacer(Modifier.height(48.dp))
                     Text(
-                        "Microphone permission is permanently denied. " +
-                            "Enable it from system Settings to use the detector."
+                        "Microphone permission is permanently denied. Enable it from system Settings to use the detector.",
+                        modifier = Modifier.padding(horizontal = 24.dp)
                     )
                 }
-
                 PermissionState.GRANTED -> {
-                    Text(
-                        text = "Swipe left/right to switch modes",
-                        fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(Modifier.height(16.dp))
+                    TabRow(selectedTabIndex = pagerState.currentPage) {
+                        Tab(
+                            selected = pagerState.currentPage == 0,
+                            onClick = { coroutineScope.launch { pagerState.animateScrollToPage(0) } },
+                            text = { Text("Averaging") }
+                        )
+                        Tab(
+                            selected = pagerState.currentPage == 1,
+                            onClick = { coroutineScope.launch { pagerState.animateScrollToPage(1) } },
+                            text = { Text("Realtime") }
+                        )
+                    }
+
+                    Spacer(Modifier.height(24.dp))
+
                     androidx.compose.foundation.pager.HorizontalPager(
                         state = pagerState,
-                        modifier = Modifier.fillMaxSize()
+                        modifier = Modifier.fillMaxWidth()
                     ) { page ->
-                        Column(
-                            modifier = Modifier.fillMaxSize(),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.Center
-                        ) {
-                            DetectionPanel(
-                                uiState = uiState, 
-                                pageMode = if (page == 0) DetectionMode.CONTINUOUS_AVERAGING else DetectionMode.CONTINUOUS_REALTIME,
-                                onToggleDetection = onToggleDetection,
-                                onToggleReplay = onToggleReplay,
-                                onSwitchModel = onSwitchModel
-                            )
-                        }
+                        DetectionPanel(
+                            uiState = uiState,
+                            onToggleDetection = onToggleDetection,
+                            onToggleReplay = onToggleReplay,
+                            onSwitchModel = onSwitchModel
+                        )
                     }
                 }
             }
 
             uiState.errorMessage?.let { message ->
                 Spacer(Modifier.height(16.dp))
-                Text(text = message, color = MaterialTheme.colorScheme.error)
+                Text(text = message, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(horizontal = 24.dp))
             }
         }
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun DetectionPanel(
     uiState: DetectorUiState,
-    pageMode: DetectionMode,
     onToggleDetection: () -> Unit,
     onToggleReplay: () -> Unit,
     onSwitchModel: (String) -> Unit
 ) {
     val result = uiState.lastResult
+    val view = LocalView.current
+
+    // Trigger haptics on state change
+    val stateId = when {
+        uiState.isSilent -> 1
+        result?.label == SpoofLabel.LIVE -> 2
+        result?.label == SpoofLabel.SPOOF -> 3
+        else -> 0
+    }
+    LaunchedEffect(stateId) {
+        if (stateId > 0) {
+            view.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
+        }
+    }
 
     var progress by remember { mutableFloatStateOf(0f) }
     var showScores by remember { mutableStateOf(false) }
 
-    LaunchedEffect(uiState.isRecording) {
-        if (uiState.isRecording) {
+    LaunchedEffect(uiState.isRecording, uiState.isPlaying) {
+        if (uiState.isRecording || uiState.isPlaying) {
             while (isActive) {
                 progress = 0f
                 animate(
@@ -188,106 +232,30 @@ private fun DetectionPanel(
         }
     }
 
-    Text(
-        text = if (pageMode == DetectionMode.CONTINUOUS_AVERAGING) "Continuous (Averaging)" else "Continuous (Realtime)",
-        style = MaterialTheme.typography.titleMedium
-    )
-    Spacer(Modifier.height(24.dp))
-
-    Box(
-        modifier = Modifier.size(180.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        if (uiState.isRecording || uiState.isPlaying) {
-            CircularProgressIndicator(
-                progress = if (uiState.isPlaying) 1f else progress, // Indeterminate during replay could be used, or just full ring
-                modifier = Modifier.fillMaxSize(),
-                color = if (uiState.isPlaying) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.primary,
-                strokeWidth = 4.dp
-            )
-        }
-
-        Box(
-            modifier = Modifier
-                .size(160.dp)
-                .clip(RoundedCornerShape(80.dp))
-                .background(
-                    when {
-                        uiState.isSilent -> MaterialTheme.colorScheme.surfaceVariant
-                        result?.label == SpoofLabel.LIVE -> MaterialTheme.colorScheme.primaryContainer
-                        result?.label == SpoofLabel.SPOOF -> MaterialTheme.colorScheme.errorContainer
-                        else -> MaterialTheme.colorScheme.surfaceVariant
-                    }
-                ),
-            contentAlignment = Alignment.Center
-        ) {
-            Text(
-                text = when {
-                    uiState.isSilent -> "SILENCE"
-                    result?.label == SpoofLabel.LIVE -> "LIVE"
-                    result?.label == SpoofLabel.SPOOF -> "SPOOF"
-                    uiState.isRecording -> "Listening…"
-                    else -> "Idle"
-                },
-                fontSize = 20.sp,
-                fontWeight = FontWeight.Bold
-            )
-        }
+    val targetColor = when {
+        uiState.isSilent -> MaterialTheme.colorScheme.surfaceVariant
+        result?.label == SpoofLabel.LIVE -> MaterialTheme.colorScheme.primaryContainer
+        result?.label == SpoofLabel.SPOOF -> MaterialTheme.colorScheme.errorContainer
+        else -> MaterialTheme.colorScheme.surfaceVariant
     }
+    val animatedColor by animateColorAsState(targetValue = targetColor, animationSpec = tween(300), label = "color_anim")
 
-    Spacer(Modifier.height(24.dp))
-
-    if (result != null && !uiState.isSilent) {
-        Row(
-            modifier = Modifier
-                .clip(RoundedCornerShape(8.dp))
-                .clickable { showScores = !showScores }
-                .padding(8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(if (showScores) "Hide Scores" else "Show Scores", fontSize = 14.sp)
-            Spacer(Modifier.width(4.dp))
-            Icon(
-                imageVector = if (showScores) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
-                contentDescription = null,
-                modifier = Modifier.size(16.dp)
-            )
-        }
-        
-        if (showScores) {
-            Spacer(Modifier.height(8.dp))
-            Text(text = "Bonafide logit: ${"%.3f".format(result.bonafideLogit)}", fontSize = 14.sp)
-            Text(text = "Spoof logit: ${"%.3f".format(result.spoofLogit)}", fontSize = 14.sp)
-        }
-        
-        Spacer(Modifier.height(24.dp))
-    } else if (uiState.isSilent) {
-        Text(text = "No speech detected", fontSize = 14.sp)
-        Spacer(Modifier.height(24.dp))
-    }
-
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.Center
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Top
     ) {
-        Button(onClick = onToggleDetection, enabled = !uiState.isPlaying) {
-            Text(
-                if (uiState.isRecording) "Stop detection" 
-                else "Start detection"
-            )
-        }
-
+        // Model selection chip
         if (uiState.availableModels.isNotEmpty()) {
-            Spacer(Modifier.width(16.dp))
             var modelMenuExpanded by remember { mutableStateOf(false) }
             Box {
-                Button(
+                FilterChip(
+                    selected = false,
                     onClick = { modelMenuExpanded = true },
+                    label = { Text(uiState.selectedModel ?: "Select Model") },
+                    trailingIcon = { Icon(Icons.Default.KeyboardArrowDown, contentDescription = null) },
                     enabled = !uiState.isRecording && !uiState.isPlaying
-                ) {
-                    Text(uiState.selectedModel ?: "Select Model")
-                    Icon(Icons.Default.KeyboardArrowDown, contentDescription = null)
-                }
+                )
                 DropdownMenu(
                     expanded = modelMenuExpanded,
                     onDismissRequest = { modelMenuExpanded = false }
@@ -304,12 +272,206 @@ private fun DetectionPanel(
                 }
             }
         }
-    }
 
-    if (uiState.recordedAudio != null) {
-        Spacer(Modifier.height(16.dp))
-        Button(onClick = onToggleReplay, enabled = !uiState.isRecording) {
-            Text(if (uiState.isPlaying) "Stop Replay" else "Replay Recording")
+        Spacer(Modifier.height(32.dp))
+
+        // Status indicator
+        Box(
+            modifier = Modifier.size(240.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            // Loading arc
+            if (uiState.isRecording || uiState.isPlaying) {
+                val pColor = if (uiState.isPlaying) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.primary
+                Canvas(modifier = Modifier.size(168.dp)) {
+                    drawArc(
+                        color = pColor,
+                        startAngle = progress * 360f,
+                        sweepAngle = 90f,
+                        useCenter = false,
+                        style = Stroke(width = 4.dp.toPx(), cap = StrokeCap.Round)
+                    )
+                }
+            }
+
+            // Main circle
+            Box(
+                modifier = Modifier
+                    .size(160.dp)
+                    .clip(RoundedCornerShape(80.dp))
+                    .background(animatedColor)
+                    .semantics { liveRegion = LiveRegionMode.Polite },
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    when {
+                        uiState.isSilent -> {
+                            Text("Silence", fontSize = 20.sp, fontWeight = FontWeight.Medium)
+                        }
+                        uiState.isRecording && uiState.mode == DetectionMode.CONTINUOUS_AVERAGING -> {
+                            Text("Analyzing...", fontSize = 18.sp, fontWeight = FontWeight.Medium)
+                        }
+                        result?.label == SpoofLabel.LIVE -> {
+                            Text("Live voice", fontSize = 20.sp, fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.primary)
+                        }
+                        result?.label == SpoofLabel.SPOOF -> {
+                            Text("Spoof voice", fontSize = 20.sp, fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.error)
+                        }
+                        else -> {
+                            Text("Idle", fontSize = 20.sp, fontWeight = FontWeight.Medium)
+                        }
+                    }
+                }
+            }
         }
+
+        Spacer(Modifier.height(24.dp))
+
+        // Start/Stop CTA (pill button)
+        Button(
+            onClick = onToggleDetection,
+            enabled = !uiState.isPlaying,
+            modifier = Modifier
+                .fillMaxWidth(0.9f)
+                .height(44.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = if (uiState.isRecording) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+            )
+        ) {
+            Icon(
+                if (uiState.isRecording) Icons.Default.Clear else Icons.Default.PlayArrow,
+                contentDescription = null,
+                modifier = Modifier.size(16.dp)
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                if (uiState.isRecording) "Stop detection" else "Start detection",
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Medium
+            )
+        }
+
+        Spacer(Modifier.height(16.dp))
+
+        if (uiState.recordedAudio != null) {
+            Button(
+                onClick = onToggleReplay,
+                enabled = !uiState.isRecording,
+                modifier = Modifier.fillMaxWidth(0.7f)
+            ) {
+                Text(if (uiState.isPlaying) "Stop Replay" else "Replay Recording")
+            }
+        }
+
+        Spacer(Modifier.height(16.dp))
+
+        // Expandable scores
+        if (result != null && !uiState.isSilent) {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth(0.8f)
+                    .clickable { showScores = !showScores },
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(if (showScores) "Hide scores" else "Detection scores", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Icon(
+                            imageVector = if (showScores) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                            contentDescription = null
+                        )
+                    }
+                    AnimatedVisibility(visible = showScores) {
+                        Column(modifier = Modifier.padding(top = 16.dp)) {
+                            Text(text = "Bonafide logit: ${String.format("%.3f", result.bonafideLogit)}", fontSize = 12.sp, fontWeight = FontWeight.Light)
+                            Text(text = "Spoof logit: ${String.format("%.3f", result.spoofLogit)}", fontSize = 12.sp, fontWeight = FontWeight.Light)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Preview(showBackground = true, name = "Idle")
+@Composable
+fun DetectorScreenIdlePreview() {
+    MaterialTheme {
+        DetectorScreen(
+            uiState = DetectorUiState(
+                permissionState = PermissionState.GRANTED,
+                availableModels = listOf("tt16_100eps", "model_v2"),
+                selectedModel = "tt16_100eps"
+            ),
+            onRequestPermission = {},
+            onToggleDetection = {},
+            onSwitchMode = {},
+            onToggleReplay = {},
+            onSwitchModel = {}
+        )
+    }
+}
+
+@Preview(showBackground = true, name = "Live Result")
+@Composable
+fun DetectorScreenLivePreview() {
+    MaterialTheme {
+        DetectorScreen(
+            uiState = DetectorUiState(
+                permissionState = PermissionState.GRANTED,
+                lastResult = DetectionResult(bonafideLogit = 2.0f, spoofLogit = -2.0f, label = SpoofLabel.LIVE),
+                availableModels = listOf("tt16_100eps"),
+                selectedModel = "tt16_100eps"
+            ),
+            onRequestPermission = {},
+            onToggleDetection = {},
+            onSwitchMode = {},
+            onToggleReplay = {},
+            onSwitchModel = {}
+        )
+    }
+}
+
+@Preview(showBackground = true, name = "Spoof Result")
+@Composable
+fun DetectorScreenSpoofPreview() {
+    MaterialTheme {
+        DetectorScreen(
+            uiState = DetectorUiState(
+                permissionState = PermissionState.GRANTED,
+                lastResult = DetectionResult(bonafideLogit = -2.0f, spoofLogit = 2.0f, label = SpoofLabel.SPOOF),
+                availableModels = listOf("tt16_100eps"),
+                selectedModel = "tt16_100eps"
+            ),
+            onRequestPermission = {},
+            onToggleDetection = {},
+            onSwitchMode = {},
+            onToggleReplay = {},
+            onSwitchModel = {}
+        )
+    }
+}
+
+@Preview(showBackground = true, name = "Realtime Mode")
+@Composable
+fun DetectorScreenRealtimePreview() {
+    MaterialTheme {
+        DetectorScreen(
+            uiState = DetectorUiState(
+                permissionState = PermissionState.GRANTED,
+                mode = DetectionMode.CONTINUOUS_REALTIME,
+                availableModels = listOf("tt16_100eps"),
+                selectedModel = "tt16_100eps"
+            ),
+            onRequestPermission = {},
+            onToggleDetection = {},
+            onSwitchMode = {},
+            onToggleReplay = {},
+            onSwitchModel = {}
+        )
     }
 }
